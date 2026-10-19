@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sajilo HR</title>
+<style>
+  :root{ --navy:#14215b; --blue:#2f5fd0; --bg:#f5f6fb; --line:#dde1ee; --ok:#1f7a45; --bad:#b42318; }
+  *{box-sizing:border-box;}
+  body{margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:#1d2233;}
+  header{background:var(--navy); color:#fff; display:flex; align-items:center; gap:16px; padding:12px 24px;}
+  header .brand{font-weight:700; font-size:20px; margin-right:auto;}
+  header .who{font-size:15px;}
+  .badge{background:#ffd27a; color:#3a2a00; font-size:12px; font-weight:700; padding:3px 8px; border-radius:12px; letter-spacing:.04em;}
+  header button{background:transparent; color:#fff; border:1px solid rgba(255,255,255,.5); border-radius:6px; padding:6px 12px; cursor:pointer;}
+  nav{background:#fff; border-bottom:1px solid var(--line); padding:0 24px; display:flex; gap:4px;}
+  nav a{display:inline-block; padding:12px 14px; color:var(--navy); text-decoration:none; border-bottom:3px solid transparent;}
+  nav a[aria-current="page"]{border-bottom-color:var(--blue); font-weight:600;}
+  main{max-width:860px; margin:28px auto; padding:0 24px;}
+  .card{background:#fff; border:1px solid var(--line); border-radius:10px; padding:22px 24px; margin-bottom:18px;}
+  h1{font-size:26px; margin:0 0 14px; color:var(--navy);}
+  h2{font-size:18px; margin:0 0 12px; color:var(--navy);}
+  label{display:block; font-size:14px; font-weight:600; margin:12px 0 4px;}
+  input,select{width:100%; padding:9px 10px; border:1px solid #b9bfd3; border-radius:6px; font-size:15px;}
+  .primary{margin-top:16px; background:var(--blue); color:#fff; border:none; border-radius:6px; padding:10px 18px; font-size:15px; cursor:pointer;}
+  .primary:disabled{opacity:.6; cursor:wait;}
+  table{width:100%; border-collapse:collapse; font-size:15px;}
+  th,td{text-align:left; padding:9px 10px; border-bottom:1px solid var(--line);}
+  td.num,th.num{text-align:right;}
+  tfoot td{font-weight:700;}
+  .alert{margin-top:12px; padding:10px 12px; border-radius:6px; font-size:14px;}
+  .alert.error{background:#fde8e6; color:var(--bad);}
+  .alert.info{background:#e8f0ff; color:#1d3d8f;}
+  .login{max-width:380px; margin:60px auto;}
+  ul.leaves{list-style:none; padding:0; margin:0;}
+  ul.leaves li{display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--line);}
+  ul.leaves button{background:#fff; border:1px solid #b9bfd3; border-radius:6px; padding:5px 10px; cursor:pointer;}
+  .status{font-size:12px; font-weight:700; color:#8a5a00; background:#fff3d6; padding:2px 8px; border-radius:10px;}
+  .muted{color:#69708a;}
+  .denied{border-color:#f3b8b2;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+/* Sajilo HR v2: practice app for the Qrius Playwright bootcamp.
+   The JWT lives in localStorage under "sajilo_token". */
+const TOKEN_KEY = 'sajilo_token';
+const PAGES = {
+  '/dashboard': { title: 'Dashboard', roles: null },
+  '/leave':     { title: 'My leave',  roles: null },
+  '/staff':     { title: 'Staff',     roles: ['ADMIN', 'HR'] },
+  '/payroll':   { title: 'Payroll',   roles: ['ADMIN'] },
+};
+const root = document.getElementById('root');
+let currentUser = null;
+
+/* Opened by double-clicking the file? The app needs its server for logins. */
+if (location.protocol === 'file:') {
+  root.innerHTML = `
+    <main class="login"><div class="card">
+      <h1>Sajilo HR needs its server</h1>
+      <p>This page was opened as a file, so it cannot log anyone in.</p>
+      <p>In Git Bash, from your project folder, run:</p>
+      <pre style="background:#14215b;color:#fff;padding:10px 12px;border-radius:6px">node app/sajilo-hr-server.js</pre>
+      <p>Then open <strong>http://localhost:5050</strong> in your browser.</p>
+    </div></main>`;
+  throw new Error('Sajilo HR must be opened through http://localhost:5050, not as a file');
+}
+
+const rupees = (n) => 'Rs ' + n.toLocaleString('en-IN');
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(method, url, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  return { status: res.status, data };
+}
+
+function go(path, notice) {
+  history.pushState({}, '', path);
+  render(notice);
+}
+
+window.addEventListener('popstate', () => render());
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-link]');
+  if (a) { e.preventDefault(); go(a.getAttribute('href')); }
+});
+
+/* ---------------- login ---------------- */
+function showLogin(notice) {
+  currentUser = null;
+  if (location.pathname !== '/login') history.replaceState({}, '', '/login');
+  document.title = 'Log in | Sajilo HR';
+  root.innerHTML = `
+    <main class="login">
+      <div class="card">
+        <h1>Sajilo HR</h1>
+        <p class="muted">Staff portal. Log in with your work account.</p>
+        ${notice ? `<div class="alert info" role="status">${esc(notice)}</div>` : ''}
+        <form id="login-form" novalidate>
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" />
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" />
+          <button class="primary" type="submit">Log in</button>
+          <div id="login-error"></div>
+        </form>
+      </div>
+    </main>`;
+  const form = document.getElementById('login-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    const box = document.getElementById('login-error');
+    box.innerHTML = '';
+    btn.disabled = true; btn.textContent = 'Logging in...';
+    const { status, data } = await api('POST', '/api/login', {
+      username: form.username.value.trim(), password: form.password.value,
+    });
+    if (status === 200) {
+      localStorage.setItem(TOKEN_KEY, data.token);
+      go('/dashboard');
+    } else {
+      btn.disabled = false; btn.textContent = 'Log in';
+      // v2: the server explains what went wrong; show its message as it is
+      const message = (data && data.message) || 'Something went wrong. Please try again.';
+      box.innerHTML = `<div class="alert error" role="alert">${esc(message)}</div>`;
+    }
+  });
+}
+
+/* ---------------- shell (header + nav) ---------------- */
+function shell(path) {
+  const links = Object.entries(PAGES)
+    .filter(([, p]) => !p.roles || p.roles.includes(currentUser.role))
+    .map(([href, p]) => `<a href="${href}" data-link ${href === path ? 'aria-current="page"' : ''}>${p.title}</a>`)
+    .join('');
+  root.innerHTML = `
+    <header>
+      <span class="brand">Sajilo HR</span>
+      <span class="who">Namaste, ${esc(currentUser.name)}</span>
+      <span class="badge" data-testid="role-badge">${esc(currentUser.role)}</span>
+      <button type="button" id="logout">Log out</button>
+    </header>
+    <nav aria-label="Main">${links}</nav>
+    <main id="content"><p class="muted">Loading...</p></main>`;
+  document.getElementById('logout').addEventListener('click', () => {
+    localStorage.removeItem(TOKEN_KEY);
+    showLogin('You have logged out.');
+  });
+  return document.getElementById('content');
+}
+
+function denied(content, title) {
+  content.innerHTML = `
+    <div class="card denied">
+      <h1>Access denied</h1>
+      <p>Your role (${esc(currentUser.role)}) cannot open ${esc(title)}.</p>
+      <p><a href="/dashboard" data-link>Back to dashboard</a></p>
+    </div>`;
+}
+
+/* ---------------- pages ---------------- */
+async function dashboardPage(content) {
+  content.innerHTML = `
+    <div class="card">
+      <h1>Dashboard</h1>
+      <p>You are signed in as <strong>${esc(currentUser.username)}</strong>.</p>
+      <p class="muted">Dashain-Tihar leave requests for 2083 are now open. Apply from My leave.</p>
+    </div>`;
+}
+
+async function staffPage(content) {
+  const { status, data } = await api('GET', '/api/staff');
+  if (status === 403) return denied(content, 'Staff');
+  content.innerHTML = `
+    <div class="card">
+      <h1>Staff directory</h1>
+      <table aria-label="Staff">
+        <thead><tr><th>Name</th><th>Department</th><th>Branch</th></tr></thead>
+        <tbody>${data.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.department)}</td><td>${esc(s.branch)}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+async function payrollPage(content) {
+  const { status, data } = await api('GET', '/api/payroll');
+  if (status === 403) return denied(content, 'Payroll');
+  const total = data.reduce((sum, p) => sum + p.salary, 0);
+  content.innerHTML = `
+    <div class="card">
+      <h1>Payroll</h1>
+      <p class="muted">Monthly basic salary, Kartik 2083</p>
+      <table aria-label="Payroll">
+        <thead><tr><th>Name</th><th class="num">Basic salary</th></tr></thead>
+        <tbody>${data.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${rupees(p.salary)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td>Total monthly payroll</td><td class="num" data-testid="payroll-total">${rupees(total)}</td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
+async function leavePage(content) {
+  content.innerHTML = `
+    <div class="card">
+      <h1>My leave</h1>
+      <form id="leave-form" novalidate>
+        <h2>Apply for leave</h2>
+        <label for="leave-type">Leave type</label>
+        <select id="leave-type">
+          <option value="">Choose...</option>
+          <option>Dashain-Tihar leave</option>
+          <option>Sick leave</option>
+          <option>Home leave</option>
+        </select>
+        <label for="leave-days">Days</label>
+        <input id="leave-days" type="number" min="1" max="15" />
+        <label for="leave-reason">Reason</label>
+        <input id="leave-reason" />
+        <button class="primary" type="submit">Apply</button>
+        <div id="leave-msg"></div>
+      </form>
+    </div>
+    <div class="card">
+      <h2>My requests</h2>
+      <div id="leave-list"><p class="muted">Loading...</p></div>
+    </div>`;
+
+  async function refresh() {
+    const { data } = await api('GET', '/api/leave');
+    const box = document.getElementById('leave-list');
+    if (!data.length) { box.innerHTML = '<p>No leave requests yet.</p>'; return; }
+    box.innerHTML = `<ul class="leaves" aria-label="My leave requests">${data.map((l) => `
+      <li>
+        <span>${esc(l.type)} · ${l.days} ${l.days === 1 ? 'day' : 'days'} · ${esc(l.reason)}</span>
+        <span><span class="status">${esc(l.status)}</span>
+        <button type="button" data-id="${l.id}">Cancel</button></span>
+      </li>`).join('')}</ul>`;
+    box.querySelectorAll('button[data-id]').forEach((b) => b.addEventListener('click', async () => {
+      await api('DELETE', '/api/leave/' + b.dataset.id);
+      refresh();
+    }));
+  }
+
+  document.getElementById('leave-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('leave-msg');
+    const { status } = await api('POST', '/api/leave', {
+      type: document.getElementById('leave-type').value,
+      days: Number(document.getElementById('leave-days').value),
+      reason: document.getElementById('leave-reason').value.trim(),
+    });
+    msg.innerHTML = status === 201
+      ? '<div class="alert info" role="status">Leave request submitted.</div>'
+      : '<div class="alert error" role="alert">Choose a leave type, 1 to 15 days, and a reason.</div>';
+    if (status === 201) { e.target.reset(); refresh(); }
+  });
+  refresh();
+}
+
+const RENDER = { '/dashboard': dashboardPage, '/staff': staffPage, '/payroll': payrollPage, '/leave': leavePage };
+
+/* ---------------- router ---------------- */
+async function render(notice) {
+  let path = location.pathname;
+  if (path === '/' ) { history.replaceState({}, '', '/dashboard'); path = '/dashboard'; }
+  if (path === '/login') {
+    if (!localStorage.getItem(TOKEN_KEY)) return showLogin(notice);
+    history.replaceState({}, '', '/dashboard'); path = '/dashboard';
+  }
+  if (!localStorage.getItem(TOKEN_KEY)) return showLogin('Please log in to continue.');
+
+  if (!currentUser) {
+    const me = await api('GET', '/api/me');
+    if (me.status !== 200) {
+      localStorage.removeItem(TOKEN_KEY);
+      return showLogin('Your session has expired. Please log in again.');
+    }
+    currentUser = me.data;
+  }
+  if (!RENDER[path]) { history.replaceState({}, '', '/dashboard'); path = '/dashboard'; }
+  document.title = PAGES[path].title + ' | Sajilo HR';
+  const content = shell(path);
+  await RENDER[path](content);
+}
+
+render();
+</script>
+</body>
+</html>
